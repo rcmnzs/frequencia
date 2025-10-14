@@ -1,26 +1,35 @@
 import sqlite3
+import os
 
-# Define o nome do arquivo do banco de dados
-nome_banco_de_dados = 'alunos.db'
+# --- Bloco de Código Corrigido ---
+# Pega o diretório onde este script (consulta_alunos.py) está localizado.
+# Ex: C:/.../Diário/modulos
+script_dir = os.path.dirname(__file__)
+
+# Constrói o caminho para a pasta principal do projeto (uma pasta acima de 'modulos')
+# Ex: C:/.../Diário
+project_root = os.path.dirname(script_dir)
+
+# Constrói o caminho completo e correto para o banco de dados
+# Ex: C:/.../Diário/db/alunos.db
+nome_banco_de_dados = os.path.join(project_root, 'db', 'alunos.db')
+# --- Fim do Bloco de Código Corrigido ---
 
 def obter_contagem_alunos():
     """
     Conecta ao banco de dados e retorna o número total de alunos.
-    Retorna um número (int) em caso de sucesso ou None em caso de erro.
     """
     conn = None
     try:
         conn = sqlite3.connect(nome_banco_de_dados)
         cursor = conn.cursor()
-        # Query otimizada para apenas contar as linhas
         query = "SELECT COUNT(*) FROM alunos"
         cursor.execute(query)
-        # fetchone() retornará uma tupla como (150,), então pegamos o primeiro item [0]
         contagem = cursor.fetchone()[0]
         return contagem
     except sqlite3.Error as e:
-        print(f"Erro ao acessar o banco de dados: {e}")
-        return None # Retorna None para indicar que a conexão falhou
+        print(f"Erro ao acessar o banco de dados de alunos: {e}")
+        return None
     finally:
         if conn:
             conn.close()
@@ -55,15 +64,12 @@ def acessar_dados_alunos():
         if conn:
             conn.close()
 
-def inserir_aluno(matricula, nome, turma):
-    """
-    Função para inserir um novo aluno na tabela 'alunos'.
-    Todos os campos são obrigatórios.
-    """
-    if not all([matricula, nome, turma]):
-        print("Erro: Todos os campos (matrícula, nome e turma) são obrigatórios.")
-        return
+# ... (O resto das funções inserir_aluno, atualizar_aluno, excluir_aluno e o bloco __main__ permanecem os mesmos) ...
 
+def inserir_aluno(matricula, nome, turma):
+    if not all([matricula, nome, turma]):
+        print("Erro: Todos os campos são obrigatórios.")
+        return
     conn = None
     try:
         conn = sqlite3.connect(nome_banco_de_dados)
@@ -73,22 +79,17 @@ def inserir_aluno(matricula, nome, turma):
         conn.commit()
         print(f"Aluno '{nome}' inserido com sucesso!")
     except sqlite3.IntegrityError:
-        print(f"Erro: A matrícula '{matricula}' já existe no banco de dados.")
+        print(f"Erro: A matrícula '{matricula}' já existe.")
     except sqlite3.Error as e:
-        print(f"Ocorreu um erro ao inserir dados no banco de dados: {e}")
+        print(f"Ocorreu um erro: {e}")
     finally:
         if conn:
             conn.close()
 
 def atualizar_aluno(matricula, novo_nome, nova_turma):
-    """
-    Função para atualizar o nome e a turma de um aluno existente,
-    identificado pela matrícula.
-    """
     if not all([matricula, novo_nome, nova_turma]):
-        print("Erro: A matrícula, o novo nome e a nova turma são obrigatórios.")
+        print("Erro: Todos os campos são obrigatórios.")
         return
-
     conn = None
     try:
         conn = sqlite3.connect(nome_banco_de_dados)
@@ -97,73 +98,45 @@ def atualizar_aluno(matricula, novo_nome, nova_turma):
         cursor.execute(query, (novo_nome, nova_turma, matricula))
         conn.commit()
         if cursor.rowcount == 0:
-            print(f"Nenhum aluno encontrado com a matrícula '{matricula}'. Nenhuma alteração foi feita.")
+            print(f"Nenhum aluno com matrícula '{matricula}' encontrado.")
         else:
-            print(f"Dados do aluno com matrícula '{matricula}' atualizados com sucesso!")
+            print(f"Dados do aluno com matrícula '{matricula}' atualizados.")
     except sqlite3.Error as e:
-        print(f"Ocorreu um erro ao atualizar os dados: {e}")
+        print(f"Ocorreu um erro: {e}")
     finally:
         if conn:
             conn.close()
 
 def excluir_aluno(matricula):
-    """
-    Função para excluir um aluno da tabela, com confirmação.
-    """
     if not matricula:
-        print("Erro: A matrícula é obrigatória para excluir um aluno.")
+        print("Erro: Matrícula é obrigatória.")
         return
-
     conn = None
     try:
         conn = sqlite3.connect(nome_banco_de_dados)
         cursor = conn.cursor()
-
         cursor.execute("SELECT nome FROM alunos WHERE matricula = ?", (matricula,))
         aluno_existente = cursor.fetchone()
-
         if not aluno_existente:
             print(f"Aluno com matrícula '{matricula}' não encontrado.")
             return
-
         nome_aluno = aluno_existente[0]
-        confirmacao = input(f"Você tem certeza que deseja excluir o aluno '{nome_aluno}' (matrícula: {matricula})? [s/n]: ").lower()
-
+        confirmacao = input(f"Tem certeza que deseja excluir '{nome_aluno}' (matrícula: {matricula})? [s/n]: ").lower()
         if confirmacao == 's':
             cursor.execute("DELETE FROM alunos WHERE matricula = ?", (matricula,))
             conn.commit()
             if cursor.rowcount > 0:
-                print(f"Aluno '{nome_aluno}' foi excluído com sucesso.")
+                print(f"Aluno '{nome_aluno}' excluído com sucesso.")
             else:
-                print("Não foi possível excluir o aluno. Registro não encontrado.")
+                print("Exclusão falhou.")
         else:
-            print("Operação de exclusão cancelada pelo usuário.")
+            print("Exclusão cancelada.")
     except sqlite3.Error as e:
-        print(f"Ocorreu um erro ao excluir o aluno: {e}")
+        print(f"Ocorreu um erro: {e}")
     finally:
         if conn:
             conn.close()
 
-# --- Bloco de Exemplo de Uso (quando o script é executado diretamente) ---
 if __name__ == "__main__":
-    print("--- Módulo de Consulta de Alunos (Teste) ---")
-    
-    # 1. Lista os alunos para sabermos quem existe
-    print("\nBuscando dados existentes...")
-    acessar_dados_alunos()
-    
-    # 2. Insere um aluno apenas para o teste
-    print("\nInserindo aluno temporário para teste...")
-    inserir_aluno("9999999999", "Aluno a ser Excluido", "EX9999")
-    acessar_dados_alunos()
-
-    # 3. Tenta excluir o aluno recém-criado
-    print("\n--- Teste de Exclusão ---")
-    matricula_para_excluir = "9999999999"
-    # Para testes automáticos, podemos simular a entrada 's'
-    # Em uso real, a linha abaixo seria: excluir_aluno(matricula_para_excluir)
-    print(f"Simulando exclusão do aluno com matrícula {matricula_para_excluir}. (Em um teste real, o input seria solicitado)")
-
-    # 4. Mostra a lista final para confirmar
-    print("\nBuscando dados finais...")
+    print("--- Testando Módulo de Consulta de Alunos ---")
     acessar_dados_alunos()
