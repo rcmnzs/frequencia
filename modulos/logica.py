@@ -26,28 +26,76 @@ except locale.Error:
 
 # ... (O resto do arquivo, incluindo todas as funções, permanece exatamente o mesmo) ...
 
-def buscar_aluno(df_alunos, matricula_pdf=None, nome_pdf=None):
+# Em modulos/logica.py, substitua apenas esta função:
+
+def buscar_aluno(df_alunos, matricula_pdf=None, nome_pdf=None, logger=print):
+    """
+    Busca um aluno no DataFrame df_alunos usando uma lógica de cascata aprimorada
+    para lidar com nomes parcialmente cortados e evitar colisões.
+    """
+    # Nível 1: Busca por matrícula (mais confiável)
     if matricula_pdf:
         resultado = df_alunos[df_alunos['matricula'] == str(matricula_pdf)]
-        if not resultado.empty: return resultado.iloc[0]
+        if not resultado.empty:
+            return resultado.iloc[0]
+
     if nome_pdf:
+        # Nível 2: Busca por nome completo exato
         nome_pdf_normalizado = ' '.join(nome_pdf.strip().upper().split())
         resultado = df_alunos[df_alunos['nome'].str.strip().str.upper() == nome_pdf_normalizado]
-        if not resultado.empty: return resultado.iloc[0]
+        if not resultado.empty:
+            return resultado.iloc[0]
+
+        # --- NÍVEL 3: BUSCA PARCIAL COM VERIFICAÇÃO DE AMBIGUIDADE (A GRANDE MUDANÇA) ---
         palavras_pdf = nome_pdf_normalizado.split()
-        if len(palavras_pdf) < 2: return None
+        
+        if len(palavras_pdf) < 2:
+            return None # Evita falsos positivos com nomes de uma só palavra
+
+        # Lista para armazenar todas as correspondências parciais encontradas
+        correspondencias_parciais = []
+
         for index, row in df_alunos.iterrows():
             nome_db_normalizado = ' '.join(row['nome'].strip().upper().split())
             palavras_db = nome_db_normalizado.split()
-            if len(palavras_pdf) > len(palavras_db): continue
+
+            if len(palavras_pdf) > len(palavras_db):
+                continue
+            
             match = True
             for i in range(len(palavras_pdf)):
-                palavra_pdf, palavra_db = palavras_pdf[i], palavras_db[i]
+                palavra_pdf = palavras_pdf[i]
+                palavra_db = palavras_db[i]
+
                 if i == len(palavras_pdf) - 1:
-                    if not palavra_db.startswith(palavra_pdf): match = False; break
+                    if not palavra_db.startswith(palavra_pdf):
+                        match = False
+                        break
                 else:
-                    if palavra_pdf != palavra_db: match = False; break
-            if match: return row
+                    if palavra_pdf != palavra_db:
+                        match = False
+                        break
+            
+            if match:
+                correspondencias_parciais.append(row)
+
+        # --- Análise dos resultados da busca parcial ---
+        
+        # Caso 1: Exatamente uma correspondência encontrada. Sucesso!
+        if len(correspondencias_parciais) == 1:
+            aluno_encontrado = correspondencias_parciais[0]
+            logger(f"  -> Correspondência parcial única encontrada: '{nome_pdf}' -> '{aluno_encontrado['nome']}'")
+            return aluno_encontrado
+        
+        # Caso 2: Múltiplas correspondências encontradas. Risco de colisão!
+        elif len(correspondencias_parciais) > 1:
+            logger(f"  AVISO: Múltiplos alunos encontrados para o nome '{nome_pdf}'. Verificação manual necessária.")
+            # Loga os nomes encontrados para facilitar a depuração
+            nomes_encontrados = [aluno['nome'] for aluno in correspondencias_parciais]
+            logger(f"     -> Possíveis correspondências: {nomes_encontrados}")
+            return None # Retorna None para forçar a verificação manual
+        
+    # Caso 3: Nenhuma correspondência encontrada em nenhum nível
     return None
 
 def carregar_dados_base(logger):
@@ -72,6 +120,10 @@ def carregar_dados_base(logger):
         logger(f"ERRO ao carregar os bancos de dados: {e}")
         return None, None
 
+# Em modulos/logica.py, substitua esta função:
+
+# Em modulos/logica.py, substitua esta função:
+
 def processar_dados_diarios(ausentes_path, frequencia_path, logger):
     from modulos.extrator_ausentes import extrair_dados_ausentes
     from modulos.extrator_frequencias import extrair_dados_frequencia
@@ -83,127 +135,72 @@ def processar_dados_diarios(ausentes_path, frequencia_path, logger):
     faltas_registradas = {}
     problemas_alunos = []
 
-    logger("\n--- Processando Relatório de Ausentes ---")
-    df_ausentes = extrair_dados_ausentes(ausentes_path)
+    logger("\n--- Validando e Extraindo Dados dos PDFs ---")
+    
+    df_ausentes, date_ausentes = extrair_dados_ausentes(ausentes_path)
+    df_frequencia, date_frequencia = extrair_dados_frequencia(frequencia_path)
 
-    doc = fitz.open(ausentes_path)
-    content = "".join(page.get_text() for page in doc)
-    doc.close()
-    match_data = re.search(r"Período: de (\d{2}/\d{2}/\d{4})", content)
-    if not match_data:
-        logger("ERRO: Não foi possível encontrar a data no PDF de ausentes.")
+    # --- MELHORIA DE ROBUSTEZ AQUI ---
+    # A lógica de validação de datas é movida para cá, e as mensagens são enviadas via logger
+    if date_ausentes is None:
+        logger("ERRO CRÍTICO: A data não foi encontrada no PDF de ausentes. O formato do relatório pode ter mudado. Processamento interrompido.")
         return None, None, None
-    
-    report_date = datetime.strptime(match_data.group(1), '%d/%m/%Y')
-    
-    # Obtém o número do dia da semana (0=segunda, 1=terça, etc.)
-    dia_numero = report_date.weekday()
-    
-    # Mapeamento direto por número do dia (mais confiável que strings com encoding)
-    dias_semana = {
-        0: 'SEGUNDA-FEIRA',
-        1: 'TERÇA-FEIRA',
-        2: 'QUARTA-FEIRA',
-        3: 'QUINTA-FEIRA',
-        4: 'SEXTA-FEIRA',
-        5: 'SÁBADO',
-        6: 'DOMINGO'
-    }
-    
-    dia_semana = dias_semana[dia_numero]
-    logger(f"Data do relatório identificada: {report_date.date()}")
-    logger(f"Dia da semana: {dia_semana} (índice: {dia_numero})")
-    
-    # DEBUG: Verificar dias da semana disponíveis no banco
-    dias_unicos = df_horarios['dia_semana'].unique()
-    logger(f"DEBUG: Dias da semana no banco de horários: {list(dias_unicos)}")
+    if date_frequencia is None:
+        logger("ERRO CRÍTICO: A data não foi encontrada no PDF de frequência. O formato do relatório pode ter mudado. Processamento interrompido.")
+        return None, None, None
 
+    if date_ausentes.date() != date_frequencia.date():
+        logger("\n!! ERRO CRÍTICO !!")
+        logger("Os PDFs de ausentes e frequência selecionados são de dias diferentes.")
+        logger(f"Data Ausentes: {date_ausentes.date()} | Data Frequência: {date_frequencia.date()}")
+        logger("Processamento interrompido para evitar dados inconsistentes.")
+        return None, None, None
+
+    report_date = date_ausentes
+    dia_semana = report_date.strftime('%A').upper()
+    logger(f"Validação de data bem-sucedida. Processando para o dia: {report_date.date()} ({dia_semana})")
+    
+    # --- Processa Ausentes ---
     if df_ausentes is not None and not df_ausentes.empty:
-        logger(f"Encontrados {len(df_ausentes)} alunos ausentes.")
-        
-        # Contador para debug
-        alunos_com_faltas = 0
-        alunos_sem_horario = 0
-        
-        for idx, row in df_ausentes.iterrows():
+        logger(f"\nEncontrados {len(df_ausentes)} alunos ausentes.")
+        for _, row in df_ausentes.iterrows():
+            # ... (lógica de processamento de ausentes inalterada) ...
             matricula_pdf, nome_pdf = row['Matrícula'], row['Nome']
-            info_aluno = buscar_aluno(df_alunos, matricula_pdf=matricula_pdf, nome_pdf=nome_pdf)
-            
+            info_aluno = buscar_aluno(df_alunos, matricula_pdf=matricula_pdf, nome_pdf=nome_pdf, logger=logger)
             if info_aluno is not None:
                 turma, nome_db, matricula_db = info_aluno['turma'], info_aluno['nome'], info_aluno['matricula']
-                problemas_alunos.append({
-                    'Matricula': matricula_db, 
-                    'Nome do Aluno': nome_db, 
-                    'Turma': turma, 
-                    'Problema': 'FALTOU', 
-                    'Acesso': 'Sem registro'
-                })
-                
-                # Busca aulas do dia para esta turma
-                aulas_do_dia = df_horarios[(df_horarios['turma'] == turma) & 
-                                           (df_horarios['dia_semana'] == dia_semana)]
-                
-                # DEBUG: Log para os primeiros 3 alunos
-                if idx < 3:
-                    logger(f"DEBUG: Aluno {nome_db} (Turma: {turma})")
-                    logger(f"       Buscando horários para: dia_semana='{dia_semana}', turma='{turma}'")
-                    logger(f"       Encontradas {len(aulas_do_dia)} aulas")
-                    if not aulas_do_dia.empty:
-                        logger(f"       Disciplinas: {list(aulas_do_dia['disciplina'].values)}")
-                
-                if aulas_do_dia.empty:
-                    alunos_sem_horario += 1
-                else:
-                    alunos_com_faltas += 1
-                    for _, aula in aulas_do_dia.iterrows():
-                        chave_falta = (matricula_db, nome_db, turma, aula['disciplina'])
-                        faltas_registradas[chave_falta] = faltas_registradas.get(chave_falta, 0) + 1
+                problemas_alunos.append({'Matricula': matricula_db, 'Nome do Aluno': nome_db, 'Turma': turma, 'Problema': 'FALTOU', 'Acesso': 'Sem registro'})
+                aulas_do_dia = df_horarios[(df_horarios['turma'] == turma) & (df_horarios['dia_semana'] == dia_semana)]
+                for _, aula in aulas_do_dia.iterrows():
+                    chave_falta = (matricula_db, nome_db, turma, aula['disciplina'])
+                    faltas_registradas[chave_falta] = faltas_registradas.get(chave_falta, 0) + 1
             else:
                 logger(f"  Aviso: Aluno ausente '{nome_pdf.strip()}' não encontrado no BD.")
-        
-        # Resumo do processamento
-        logger(f"\nRESUMO DO PROCESSAMENTO DE AUSENTES:")
-        logger(f"  - Alunos com faltas registradas: {alunos_com_faltas}")
-        logger(f"  - Alunos sem horário encontrado: {alunos_sem_horario}")
-        logger(f"  - Total de registros de faltas: {len(faltas_registradas)}")
+    else:
+        logger("\nAVISO: Nenhum dado de aluno ausente foi processado. Verifique o log de extração.")
 
-    logger("\n--- Processando Relatório de Frequência ---")
-    df_acessos = extrair_dados_frequencia(frequencia_path)
-
-    if df_acessos is not None and not df_acessos.empty:
-        df_acessos['Hora'] = pd.to_datetime(df_acessos['Hora'], format='%H:%M:%S').dt.time
-        for grupo_keys, acesso_aluno_df in df_acessos.groupby(['Crachá', 'Nome']):
+    # --- Processa Frequência ---
+    if df_frequencia is not None and not df_frequencia.empty:
+        logger(f"\nEncontrados {len(df_frequencia)} registros de acesso.")
+        df_frequencia['Hora'] = pd.to_datetime(df_frequencia['Hora'], format='%H:%M:%S').dt.time
+        for grupo_keys, acesso_aluno_df in df_frequencia.groupby(['Crachá', 'Nome']):
+            # ... (lógica de processamento de frequência inalterada) ...
             matricula_pdf, nome_pdf = grupo_keys
-            info_aluno = buscar_aluno(df_alunos, matricula_pdf=matricula_pdf, nome_pdf=nome_pdf)
+            info_aluno = buscar_aluno(df_alunos, matricula_pdf=matricula_pdf, nome_pdf=nome_pdf, logger=logger)
             if info_aluno is None:
                 logger(f"  Aviso: Aluno presente '{nome_pdf.strip()}' não encontrado no BD.")
                 continue
-
             turma, nome_db, matricula_db = info_aluno['turma'], info_aluno['nome'], info_aluno['matricula']
             aulas_do_dia = df_horarios[(df_horarios['turma'] == turma) & (df_horarios['dia_semana'] == dia_semana)]
             primeira_entrada = acesso_aluno_df[acesso_aluno_df['Sentido'] == 'Entrada']['Hora'].min()
             ultima_saida = acesso_aluno_df[acesso_aluno_df['Sentido'] == 'Saída']['Hora'].max()
-            
             if not aulas_do_dia.empty:
                 primeira_aula_do_dia = aulas_do_dia['hora_inicio'].min()
                 ultima_aula_do_dia = aulas_do_dia['hora_fim'].max()
                 if pd.notna(primeira_entrada) and primeira_entrada > primeira_aula_do_dia:
-                    problemas_alunos.append({
-                        'Matricula': matricula_db, 
-                        'Nome do Aluno': nome_db, 
-                        'Turma': turma, 
-                        'Problema': 'CHEGOU ATRASADO', 
-                        'Acesso': f"Entrada: {primeira_entrada.strftime('%H:%M:%S')}"
-                    })
+                    problemas_alunos.append({'Matricula': matricula_db, 'Nome do Aluno': nome_db, 'Turma': turma, 'Problema': 'CHEGOU ATRASADO', 'Acesso': f"Entrada: {primeira_entrada.strftime('%H:%M:%S')}"})
                 if pd.notna(ultima_saida) and ultima_saida < ultima_aula_do_dia:
-                    problemas_alunos.append({
-                        'Matricula': matricula_db, 
-                        'Nome do Aluno': nome_db, 
-                        'Turma': turma, 
-                        'Problema': 'SAIU CEDO', 
-                        'Acesso': f"Saída: {ultima_saida.strftime('%H:%M:%S')}"
-                    })
-
+                    problemas_alunos.append({'Matricula': matricula_db, 'Nome do Aluno': nome_db, 'Turma': turma, 'Problema': 'SAIU CEDO', 'Acesso': f"Saída: {ultima_saida.strftime('%H:%M:%S')}"})
             if pd.notna(primeira_entrada):
                 for _, aula in aulas_do_dia[aulas_do_dia['hora_fim'] < primeira_entrada].iterrows():
                     chave_falta = (matricula_db, nome_db, turma, aula['disciplina'])
@@ -212,13 +209,10 @@ def processar_dados_diarios(ausentes_path, frequencia_path, logger):
                 for _, aula in aulas_do_dia[aulas_do_dia['hora_inicio'] > ultima_saida].iterrows():
                     chave_falta = (matricula_db, nome_db, turma, aula['disciplina'])
                     faltas_registradas[chave_falta] = faltas_registradas.get(chave_falta, 0) + 1
-    
+    else:
+        logger("\nAVISO: Nenhum dado de frequência foi processado. Verifique o log de extração.")
+        
     df_problemas = pd.DataFrame(problemas_alunos)
-    
-    logger(f"\nRESUMO FINAL:")
-    logger(f"  - Total de faltas registradas: {len(faltas_registradas)}")
-    logger(f"  - Total de problemas de frequência: {len(df_problemas)}")
-    
     return report_date, faltas_registradas, df_problemas
 
 def gerar_relatorio_faltas(dados_da_sessao, logger):
