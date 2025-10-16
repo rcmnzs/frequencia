@@ -160,42 +160,118 @@ def processar_dados_diarios(ausentes_path, frequencia_path, logger):
     return report_date, faltas_registradas, df_problemas
 
 
-# --- FUNÇÃO 1: GERAR RELATÓRIO DE FALTAS DETALHADO (O ANTIGO) ---
+# Em modulos/logica.py, substitua apenas esta função:
+
 def gerar_relatorio_faltas(faltas_registradas, report_date, logger):
+    """
+    Atualiza o arquivo de relatório detalhado, adicionando/substituindo a aba do dia
+    e criando/atualizando uma aba de resumo semanal por disciplina.
+    """
+    # Importações necessárias para formatação
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.formatting.rule import FormulaRule
     from openpyxl.worksheet.datavalidation import DataValidation
-    
-    logger("\n--- Gerando Relatório Detalhado de Faltas ---")
-    # ... (código desta função permanece o mesmo da versão anterior) ...
+    from openpyxl.utils import get_column_letter
+    from openpyxl import load_workbook
+
+    logger("\n--- Gerando Relatório Detalhado de Faltas com Resumo Semanal ---")
     if not faltas_registradas:
-        logger("Nenhuma falta detalhada foi registrada.")
-        return
-    # ... (resto do código de formatação e salvamento) ...
-    sheet_name = report_date.strftime('%d-%m-%Y')
+        logger("Nenhuma falta detalhada foi registrada para o dia.")
+        return False
+
+    # Define caminhos e nomes
+    sheet_name_dia = report_date.strftime('%d-%m-%Y')
+    sheet_name_resumo = 'Quantitativo Total da Semana'
     script_dir = os.path.dirname(__file__)
     project_root = os.path.dirname(script_dir)
     relatorios_dir = os.path.join(project_root, 'relatorios')
     os.makedirs(relatorios_dir, exist_ok=True)
     output_path = os.path.join(relatorios_dir, 'relatorio_faltas_detalhado.xlsx')
 
-    lista_faltas = [list(chave) + [valor] for chave, valor in faltas_registradas.items()]
-    df_final = pd.DataFrame(lista_faltas, columns=['Matricula', 'Nome', 'Turma', 'Disciplina', 'Total de Faltas'])
-    df_final['STATUS'] = 'PENDENTE'
-    df_final.sort_values(by=['Turma', 'Nome', 'Disciplina'], inplace=True)
+    # Prepara o DataFrame do dia atual
+    lista_faltas_dia = [list(chave) + [valor] for chave, valor in faltas_registradas.items()]
+    df_dia_atual = pd.DataFrame(lista_faltas_dia, columns=['Matricula', 'Nome', 'Turma', 'Disciplina', 'Total de Faltas'])
+    df_dia_atual['STATUS'] = 'PENDENTE'
+
+    sheets_data = {}
+
+    if os.path.exists(output_path):
+        try:
+            existing_sheets = pd.read_excel(output_path, sheet_name=None)
+            for name, df in existing_sheets.items():
+                if name != sheet_name_resumo:
+                    sheets_data[name] = df
+        except Exception as e:
+            logger(f"Aviso: Não foi possível ler o arquivo Excel existente. Ele será sobrescrito. Erro: {e}")
+
+    sheets_data[sheet_name_dia] = df_dia_atual
     
+    # --- MUDANÇA PRINCIPAL AQUI ---
+    if sheets_data:
+        combined_df = pd.concat(sheets_data.values(), ignore_index=True)
+        # Agrupa também por 'Disciplina' para somar as faltas por matéria
+        df_resumo = combined_df.groupby(['Matricula', 'Nome', 'Turma', 'Disciplina'])['Total de Faltas'].sum().reset_index()
+        df_resumo.rename(columns={'Total de Faltas': 'Total na Semana'}, inplace=True)
+        df_resumo.sort_values(by=['Turma', 'Nome', 'Disciplina'], inplace=True)
+    # --- FIM DA MUDANÇA ---
+
     try:
-        mode = 'a' if os.path.exists(output_path) else 'w'
-        with pd.ExcelWriter(output_path, mode=mode, engine='openpyxl', if_sheet_exists='replace') as writer:
-            df_final.to_excel(writer, sheet_name=sheet_name, index=False)
-        
+        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+            for sheet_name, df in sorted(sheets_data.items()):
+                df.sort_values(by=['Turma', 'Nome', 'Disciplina'], inplace=True)
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
+            
+            if 'df_resumo' in locals() and not df_resumo.empty:
+                df_resumo.to_excel(writer, sheet_name=sheet_name_resumo, index=False)
+
         workbook = load_workbook(output_path)
-        worksheet = workbook[sheet_name]
-        # (código de formatação omitido para brevidade, mas é o mesmo da versão anterior)
-        # ...
+
+        def formatar_aba(worksheet, has_status_col=False):
+            header_font = Font(bold=True)
+            thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+            
+            for row in worksheet.iter_rows(min_row=1, max_row=worksheet.max_row, min_col=1, max_col=worksheet.max_column):
+                for cell in row:
+                    cell.border = thin_border
+                    if cell.row == 1:
+                        cell.font = header_font
+            
+            for col_idx, col in enumerate(worksheet.columns, 1):
+                try: # Adicionado try-except para segurança
+                    max_length = max(len(str(cell.value)) for cell in col if cell.value)
+                    worksheet.column_dimensions[get_column_letter(col_idx)].width = max_length + 2
+                except ValueError:
+                    pass # Ignora colunas vazias
+            
+            worksheet.auto_filter.ref = worksheet.dimensions
+
+            if has_status_col:
+                status_col_letter = get_column_letter(worksheet.max_column)
+                dv = DataValidation(type="list", formula1='"PENDENTE,LANÇADA"', allow_blank=True)
+                worksheet.add_data_validation(dv)
+                validation_range = f'{status_col_letter}2:{status_col_letter}{worksheet.max_row}'
+                dv.add(validation_range)
+
+                red_fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
+                green_fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
+                
+                worksheet.conditional_formatting.add(validation_range,
+                    FormulaRule(formula=[f'LEFT({status_col_letter}2, 8)="PENDENTE"'], fill=red_fill))
+                worksheet.conditional_formatting.add(validation_range,
+                    FormulaRule(formula=[f'LEFT({status_col_letter}2, 7)="LANÇADA"'], fill=green_fill))
+        
+        for sheet_name in workbook.sheetnames:
+            if sheet_name == sheet_name_resumo:
+                formatar_aba(workbook[sheet_name], has_status_col=False)
+            else:
+                formatar_aba(workbook[sheet_name], has_status_col=True)
+
         workbook.save(output_path)
-        logger(f"Relatório detalhado salvo/atualizado com sucesso em '{output_path}'")
+        logger(f"Relatório detalhado e resumo semanal salvos/atualizados com sucesso!")
+        return True
     except Exception as e:
-        logger(f"ERRO ao salvar relatório detalhado: {e}")
+        logger(f"ERRO ao salvar e formatar o arquivo Excel: {e}")
+        return False
 
 # --- FUNÇÃO 2: GERAR RELATÓRIO SIMPLES (O NOVO) ---
 
