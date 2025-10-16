@@ -162,10 +162,12 @@ def processar_dados_diarios(ausentes_path, frequencia_path, logger):
 
 # Em modulos/logica.py, substitua apenas esta função:
 
+# Em modulos/logica.py, substitua apenas esta função:
+
 def gerar_relatorio_faltas(faltas_registradas, report_date, logger):
     """
     Atualiza o arquivo de relatório detalhado, adicionando/substituindo a aba do dia
-    e criando/atualizando uma aba de resumo semanal por disciplina.
+    e criando/atualizando uma aba de resumo semanal com a coluna de STATUS.
     """
     # Importações necessárias para formatação
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -179,7 +181,6 @@ def gerar_relatorio_faltas(faltas_registradas, report_date, logger):
         logger("Nenhuma falta detalhada foi registrada para o dia.")
         return False
 
-    # Define caminhos e nomes
     sheet_name_dia = report_date.strftime('%d-%m-%Y')
     sheet_name_resumo = 'Quantitativo Total da Semana'
     script_dir = os.path.dirname(__file__)
@@ -188,10 +189,11 @@ def gerar_relatorio_faltas(faltas_registradas, report_date, logger):
     os.makedirs(relatorios_dir, exist_ok=True)
     output_path = os.path.join(relatorios_dir, 'relatorio_faltas_detalhado.xlsx')
 
-    # Prepara o DataFrame do dia atual
+    # Prepara o DataFrame do dia atual, SEM a coluna de STATUS
     lista_faltas_dia = [list(chave) + [valor] for chave, valor in faltas_registradas.items()]
     df_dia_atual = pd.DataFrame(lista_faltas_dia, columns=['Matricula', 'Nome', 'Turma', 'Disciplina', 'Total de Faltas'])
-    df_dia_atual['STATUS'] = 'PENDENTE'
+    # --- MUDANÇA 1: Linha removida daqui ---
+    # df_dia_atual['STATUS'] = 'PENDENTE' 
 
     sheets_data = {}
 
@@ -206,14 +208,24 @@ def gerar_relatorio_faltas(faltas_registradas, report_date, logger):
 
     sheets_data[sheet_name_dia] = df_dia_atual
     
-    # --- MUDANÇA PRINCIPAL AQUI ---
     if sheets_data:
-        combined_df = pd.concat(sheets_data.values(), ignore_index=True)
-        # Agrupa também por 'Disciplina' para somar as faltas por matéria
+        # Precisamos garantir que a coluna 'STATUS' não interfira no cálculo de concatenação
+        # Criamos uma lista de dataframes sem a coluna 'STATUS' para o cálculo do resumo
+        dfs_para_resumo = []
+        for df in sheets_data.values():
+            # Remove a coluna 'STATUS' se ela existir (de leituras anteriores)
+            if 'STATUS' in df.columns:
+                dfs_para_resumo.append(df.drop(columns=['STATUS']))
+            else:
+                dfs_para_resumo.append(df)
+
+        combined_df = pd.concat(dfs_para_resumo, ignore_index=True)
         df_resumo = combined_df.groupby(['Matricula', 'Nome', 'Turma', 'Disciplina'])['Total de Faltas'].sum().reset_index()
         df_resumo.rename(columns={'Total de Faltas': 'Total na Semana'}, inplace=True)
         df_resumo.sort_values(by=['Turma', 'Nome', 'Disciplina'], inplace=True)
-    # --- FIM DA MUDANÇA ---
+        
+        # --- MUDANÇA 2: Adiciona a coluna 'STATUS' APENAS no DataFrame de resumo ---
+        df_resumo['STATUS'] = 'PENDENTE'
 
     try:
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
@@ -227,6 +239,7 @@ def gerar_relatorio_faltas(faltas_registradas, report_date, logger):
         workbook = load_workbook(output_path)
 
         def formatar_aba(worksheet, has_status_col=False):
+            # ... (código interno da função de formatação permanece o mesmo) ...
             header_font = Font(bold=True)
             thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
             
@@ -237,11 +250,11 @@ def gerar_relatorio_faltas(faltas_registradas, report_date, logger):
                         cell.font = header_font
             
             for col_idx, col in enumerate(worksheet.columns, 1):
-                try: # Adicionado try-except para segurança
+                try:
                     max_length = max(len(str(cell.value)) for cell in col if cell.value)
                     worksheet.column_dimensions[get_column_letter(col_idx)].width = max_length + 2
                 except ValueError:
-                    pass # Ignora colunas vazias
+                    pass
             
             worksheet.auto_filter.ref = worksheet.dimensions
 
@@ -260,11 +273,14 @@ def gerar_relatorio_faltas(faltas_registradas, report_date, logger):
                 worksheet.conditional_formatting.add(validation_range,
                     FormulaRule(formula=[f'LEFT({status_col_letter}2, 7)="LANÇADA"'], fill=green_fill))
         
+        # --- MUDANÇA 3: Inverte a lógica de chamada da formatação ---
         for sheet_name in workbook.sheetnames:
             if sheet_name == sheet_name_resumo:
-                formatar_aba(workbook[sheet_name], has_status_col=False)
-            else:
+                # Aplica a formatação completa na aba de resumo
                 formatar_aba(workbook[sheet_name], has_status_col=True)
+            else:
+                # Aplica a formatação simples (sem status) nas abas diárias
+                formatar_aba(workbook[sheet_name], has_status_col=False)
 
         workbook.save(output_path)
         logger(f"Relatório detalhado e resumo semanal salvos/atualizados com sucesso!")
