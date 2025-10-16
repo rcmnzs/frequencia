@@ -1,7 +1,8 @@
 import tkinter as tk
-from tkinter import ttk, filedialog, scrolledtext
+from tkinter import ttk, filedialog, scrolledtext, messagebox
 import os
 import threading
+import fitz  # PyMuPDF, usado para a validação rápida
 
 try:
     from modulos.logica import processar_dados_diarios, gerar_relatorio_faltas, gerar_relatorio_simples
@@ -17,12 +18,7 @@ class App:
 
         self.ausentes_pdf_path = ""
         self.frequencia_pdf_path = ""
-        
-        # --- CORREÇÃO DEFINITIVA AQUI ---
-        # A linha que inicializa o dicionário para acumular dados da sessão.
-        # Esta linha estava faltando.
         self.dados_processados_da_sessao = {}
-        # --- FIM DA CORREÇÃO ---
 
         self.pdf_dir = os.path.join(os.path.dirname(__file__), 'pdf')
         if not os.path.exists(self.pdf_dir):
@@ -32,6 +28,7 @@ class App:
         self._update_status_bar(db_alunos_status, db_alunos_count, db_horarios_status, db_horarios_count)
 
     def _create_widgets(self):
+        # ... (código de criação de widgets permanece o mesmo) ...
         attach_frame = tk.Frame(self.root, padx=10, pady=10)
         attach_frame.pack(fill=tk.X, side=tk.TOP)
         btn_ausentes = tk.Button(attach_frame, text="Anexar PDF de Ausentes", command=self._select_ausentes_pdf)
@@ -42,24 +39,20 @@ class App:
         btn_frequencia.pack(side=tk.LEFT, padx=(20, 5))
         self.lbl_frequencia = tk.Label(attach_frame, text="Nenhum arquivo", fg="grey")
         self.lbl_frequencia.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        
         action_frame = tk.Frame(self.root)
         action_frame.pack(pady=10)
-        
         self.btn_processar = tk.Button(action_frame, text="1. Processar Dados do Dia", font=('Helvetica', 10, 'bold'), bg="#008CBA", fg="white", command=self._iniciar_processamento)
         self.btn_processar.pack(side=tk.LEFT, padx=10, ipadx=10, ipady=5)
         self.btn_gerar_detalhado = tk.Button(action_frame, text="2. Gerar Relatório Detalhado", state="disabled", command=self._gerar_relatorio_faltas)
         self.btn_gerar_detalhado.pack(side=tk.LEFT, padx=10)
         self.btn_gerar_simples = tk.Button(action_frame, text="3. Gerar Relatório Simples", state="disabled", command=self._gerar_relatorio_simples)
         self.btn_gerar_simples.pack(side=tk.LEFT, padx=10)
-        
         status_frame = tk.Frame(self.root, bd=1, relief=tk.SUNKEN)
         status_frame.pack(side=tk.BOTTOM, fill=tk.X)
         self.lbl_db_alunos_status = tk.Label(status_frame, text="BD Alunos: -", anchor='w')
         self.lbl_db_alunos_status.pack(side=tk.LEFT, padx=5)
         self.lbl_db_horarios_status = tk.Label(status_frame, text="BD Horários: -", anchor='w')
         self.lbl_db_horarios_status.pack(side=tk.LEFT, padx=5)
-        
         notebook = ttk.Notebook(self.root)
         console_frame = tk.Frame(notebook)
         notebook.add(console_frame, text='Console de Processamento')
@@ -67,6 +60,96 @@ class App:
         self.console = scrolledtext.ScrolledText(console_frame, wrap=tk.WORD, state='disabled', font=("Courier New", 9))
         self.console.pack(expand=True, fill='both')
 
+    # --- INÍCIO DAS MELHORIAS DE VALIDAÇÃO ---
+
+    def _get_pdf_text_for_validation(self, filepath):
+        """Função auxiliar que extrai o texto da primeira página de um PDF."""
+        try:
+            with fitz.open(filepath) as doc:
+                if len(doc) > 0:
+                    return doc[0].get_text()
+                return ""
+        except Exception as e:
+            self._write_to_console(f"Erro ao tentar ler o PDF para validação: {e}")
+            return None
+
+    def _select_ausentes_pdf(self):
+        """Abre a caixa de diálogo e valida o arquivo de ausentes selecionado."""
+        filepath = filedialog.askopenfilename(
+            title="Selecione o PDF de Ausentes",
+            initialdir=self.pdf_dir,
+            filetypes=[("Arquivos PDF", "*.pdf")]
+        )
+        if not filepath:
+            return
+
+        text = self._get_pdf_text_for_validation(filepath)
+        keyword = "Matrícula"
+
+        if text is None:
+            messagebox.showerror("Erro de Leitura", "Não foi possível ler o arquivo PDF. Ele pode estar corrompido.")
+            return
+
+        if keyword not in text:
+            messagebox.showerror(
+                "Arquivo Incorreto",
+                f"ERRO: O arquivo selecionado não parece ser um relatório de AUSENTES.\n\n(Verificação: a palavra-chave '{keyword}' não foi encontrada)."
+            )
+            self.ausentes_pdf_path = ""
+            self.lbl_ausentes.config(text="Nenhum arquivo selecionado", fg="grey")
+        else:
+            self.ausentes_pdf_path = filepath
+            self.lbl_ausentes.config(text=os.path.basename(filepath), fg="black")
+
+    def _select_frequencia_pdf(self):
+        """Abre a caixa de diálogo e valida o arquivo de frequência selecionado."""
+        filepath = filedialog.askopenfilename(
+            title="Selecione o PDF de Frequência",
+            initialdir=self.pdf_dir,
+            filetypes=[("Arquivos PDF", "*.pdf")]
+        )
+        if not filepath:
+            return
+
+        text = self._get_pdf_text_for_validation(filepath)
+        keyword = "Crachá:"
+
+        if text is None:
+            messagebox.showerror("Erro de Leitura", "Não foi possível ler o arquivo PDF. Ele pode estar corrompido.")
+            return
+
+        if keyword not in text:
+            messagebox.showerror(
+                "Arquivo Incorreto",
+                f"ERRO: O arquivo selecionado não parece ser um relatório de FREQUÊNCIA.\n\n(Verificação: a palavra-chave '{keyword}' não foi encontrada)."
+            )
+            self.frequencia_pdf_path = ""
+            self.lbl_frequencia.config(text="Nenhum arquivo selecionado", fg="grey")
+        else:
+            self.frequencia_pdf_path = filepath
+            self.lbl_frequencia.config(text=os.path.basename(filepath), fg="black")
+
+    # --- FIM DAS MELHORIAS DE VALIDAÇÃO ---
+
+    # ... (O resto das funções, como _iniciar_processamento, _gerar_relatorio_faltas, etc.,
+    #      permanecem exatamente as mesmas da versão anterior) ...
+    def _update_status_bar(self, alunos_status, alunos_count, horarios_status, horarios_count):
+        if alunos_status == "success":
+            self.lbl_db_alunos_status.config(text=f"BD Alunos: Conectado ({alunos_count} registros)", fg="green")
+        else:
+            self.lbl_db_alunos_status.config(text="BD Alunos: Erro de Conexão", fg="red")
+        if horarios_status == "success":
+            self.lbl_db_horarios_status.config(text=f"BD Horários: Conectado ({horarios_count} registros)", fg="green")
+        else:
+            self.lbl_db_horarios_status.config(text="BD Horários: Erro de Conexão", fg="red")
+            
+    def _write_to_console(self, message):
+        self.console.config(state='normal')
+        self.console.insert(tk.END, message + "\n")
+        self.console.see(tk.END)
+        self.console.config(state='disabled')
+        self.root.update_idletasks()
+        
     def _iniciar_processamento(self):
         self.console.config(state='normal')
         self.console.delete('1.0', tk.END)
@@ -109,35 +192,6 @@ class App:
         if sucesso:
             self.btn_gerar_detalhado.config(state="normal")
             self.btn_gerar_simples.config(state="normal")
-
-    def _update_status_bar(self, alunos_status, alunos_count, horarios_status, horarios_count):
-        if alunos_status == "success":
-            self.lbl_db_alunos_status.config(text=f"BD Alunos: Conectado ({alunos_count} registros)", fg="green")
-        else:
-            self.lbl_db_alunos_status.config(text="BD Alunos: Erro de Conexão", fg="red")
-        if horarios_status == "success":
-            self.lbl_db_horarios_status.config(text=f"BD Horários: Conectado ({horarios_count} registros)", fg="green")
-        else:
-            self.lbl_db_horarios_status.config(text="BD Horários: Erro de Conexão", fg="red")
-
-    def _select_ausentes_pdf(self):
-        filepath = filedialog.askopenfilename(title="Selecione o PDF de Ausentes", initialdir=self.pdf_dir, filetypes=[("Arquivos PDF", "*.pdf")])
-        if filepath:
-            self.ausentes_pdf_path = filepath
-            self.lbl_ausentes.config(text=os.path.basename(filepath), fg="black")
-
-    def _select_frequencia_pdf(self):
-        filepath = filedialog.askopenfilename(title="Selecione o PDF de Frequência", initialdir=self.pdf_dir, filetypes=[("Arquivos PDF", "*.pdf")])
-        if filepath:
-            self.frequencia_pdf_path = filepath
-            self.lbl_frequencia.config(text=os.path.basename(filepath), fg="black")
-            
-    def _write_to_console(self, message):
-        self.console.config(state='normal')
-        self.console.insert(tk.END, message + "\n")
-        self.console.see(tk.END)
-        self.console.config(state='disabled')
-        self.root.update_idletasks()
         
     def _gerar_relatorio_faltas(self):
         if not self.dados_processados_da_sessao:
