@@ -1,12 +1,18 @@
 import tkinter as tk
-from interface import App 
+import sys
+import os
 
-# Ajusta a forma de importar para refletir a nova pasta 'modulos'
+# --- CORREÇÃO DE IMPORTAÇÃO ---
+# Adiciona o diretório raiz do projeto (onde 'main.py' está) ao path do sistema.
+# Isso garante que 'import config' e 'from modulos import ...' funcionem corretamente.
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# --- FIM DA CORREÇÃO ---
+
+from interface import App 
 from modulos.consulta_alunos import obter_contagem_alunos
 from modulos.consulta_horarios import obter_contagem_horarios
 
 def main():
-    # ... (o resto do código permanece o mesmo) ...
     print("Verificando conexão com os bancos de dados...")
     
     alunos_count = obter_contagem_alunos()

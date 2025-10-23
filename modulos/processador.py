@@ -3,7 +3,13 @@ import os
 import re
 from datetime import datetime
 import locale
+import sqlite3
 import fitz
+import sys
+
+# Adiciona o diretório raiz ao path para encontrar o 'config'
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import config
 
 from .extrator_ausentes import extrair_dados_ausentes
 from .extrator_frequencias import extrair_dados_frequencia
@@ -14,7 +20,7 @@ except locale.Error:
     print("Aviso: Locale pt_BR.UTF-8 não encontrado.")
 
 def buscar_aluno(df_alunos, matricula_pdf=None, nome_pdf=None, logger=print):
-    # ... (código da função buscar_aluno, exatamente como antes) ...
+    # ... (código inalterado) ...
     if matricula_pdf:
         resultado = df_alunos[df_alunos['matricula'] == str(matricula_pdf)]
         if not resultado.empty: return resultado.iloc[0]
@@ -44,20 +50,16 @@ def buscar_aluno(df_alunos, matricula_pdf=None, nome_pdf=None, logger=print):
     return None
 
 def carregar_dados_base(logger):
-    # ... (código da função carregar_dados_base, exatamente como antes) ...
-    import sqlite3
-    logger("Conectando ao banco de dados...")
+    logger("Conectando ao banco de dados unificado...")
     try:
-        project_root = os.path.dirname(os.path.dirname(__file__))
-        path_unico_db = os.path.join(project_root, 'db', 'unico.db')
-        conn = sqlite3.connect(path_unico_db)
+        conn = sqlite3.connect(config.DB_PATH)
         df_alunos = pd.read_sql_query("SELECT * FROM alunos", conn)
         df_horarios = pd.read_sql_query("SELECT * FROM horarios", conn)
         conn.close()
         df_alunos['matricula'] = df_alunos['matricula'].astype(str)
         df_horarios['hora_inicio'] = pd.to_datetime(df_horarios['hora_inicio'], format='%H:%M').dt.time
         df_horarios['hora_fim'] = pd.to_datetime(df_horarios['hora_fim'], format='%H:%M').dt.time
-        logger("Bancos de dados carregados.")
+        logger("Bancos de dados carregados com sucesso.")
         return df_alunos, df_horarios
     except Exception as e:
         logger(f"ERRO ao carregar banco de dados: {e}")

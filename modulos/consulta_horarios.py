@@ -3,7 +3,8 @@ import os
 
 script_dir = os.path.dirname(__file__)
 project_root = os.path.dirname(script_dir)
-nome_banco_de_dados = os.path.join(project_root, 'db', 'unico.db')
+import config
+nome_banco_de_dados = config.DB_PATH
 
 def obter_contagem_horarios():
     """

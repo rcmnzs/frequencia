@@ -1,8 +1,56 @@
 import pandas as pd
 import os
 from openpyxl import load_workbook, Workbook
-from .formatador_excel import formatar_relatorio_detalhado, formatar_relatorio_simples
+import sys
 
+# Adiciona o diretório raiz ao path para encontrar o 'config'
+project_root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(project_root_path)
+
+import config
+# --- CORREÇÃO AQUI: REMOVIDA A IMPORTAÇÃO DO 'formatador_excel' ---
+# A função 'formatar_relatorio_detalhado' será definida aqui mesmo.
+
+# --- FUNÇÃO DE FORMATAÇÃO DO RELATÓRIO DETALHADO ---
+def formatar_relatorio_detalhado(worksheet, has_status_col=False):
+    """Aplica a formatação ao relatório detalhado e de resumo."""
+    from openpyxl.styles import Font, Border, Side, PatternFill
+    from openpyxl.formatting.rule import FormulaRule
+    from openpyxl.worksheet.datavalidation import DataValidation
+    from openpyxl.utils import get_column_letter
+
+    header_font = Font(bold=True)
+    thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+    
+    for row in worksheet.iter_rows(min_row=1, max_row=worksheet.max_row, min_col=1, max_col=worksheet.max_column):
+        for cell in row:
+            cell.border = thin_border
+            if cell.row == 1:
+                cell.font = header_font
+    
+    for col_idx, col in enumerate(worksheet.columns, 1):
+        try:
+            max_length = max(len(str(cell.value)) for cell in col if cell.value)
+            worksheet.column_dimensions[get_column_letter(col_idx)].width = max_length + 2
+        except (ValueError, TypeError):
+            pass
+    
+    worksheet.auto_filter.ref = worksheet.dimensions
+
+    if has_status_col:
+        status_col_letter = get_column_letter(worksheet.max_column)
+        dv = DataValidation(type="list", formula1='"PENDENTE,LANÇADA"', allow_blank=True)
+        worksheet.add_data_validation(dv)
+        validation_range = f'{status_col_letter}2:{status_col_letter}{worksheet.max_row}'
+        dv.add(validation_range)
+        
+        red_fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
+        green_fill = PatternFill(start_color='C6EFCE', end_color='C6EFCE', fill_type='solid')
+        
+        worksheet.conditional_formatting.add(validation_range, FormulaRule(formula=[f'LEFT({status_col_letter}2, 8)="PENDENTE"'], fill=red_fill))
+        worksheet.conditional_formatting.add(validation_range, FormulaRule(formula=[f'LEFT({status_col_letter}2, 7)="LANÇADA"'], fill=green_fill))
+
+# --- FUNÇÃO PRINCIPAL DE GERAÇÃO DO RELATÓRIO DETALHADO ---
 def gerar_relatorio_faltas(dados_da_sessao, logger):
     logger("\n--- Gerando Relatório Detalhado de Faltas com Resumo Semanal ---")
     if not dados_da_sessao:
@@ -10,9 +58,8 @@ def gerar_relatorio_faltas(dados_da_sessao, logger):
         return
 
     sheet_name_resumo = 'Quantitativo Total da Semana'
-    project_root = os.path.dirname(os.path.dirname(__file__))
-    output_path = os.path.join(project_root, 'relatorios', 'relatorio_faltas_detalhado.xlsx')
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    output_path = os.path.join(config.REPORTS_DIR, config.DETAILED_REPORT_FILENAME)
+    os.makedirs(config.REPORTS_DIR, exist_ok=True)
     
     dados_existentes = {}
     if os.path.exists(output_path):
@@ -29,7 +76,7 @@ def gerar_relatorio_faltas(dados_da_sessao, logger):
             dados_existentes[sheet_name] = pd.DataFrame(lista_faltas, columns=['Matricula', 'Nome', 'Turma', 'Disciplina', 'Total de Faltas'])
     
     if dados_existentes:
-        dfs_para_resumo = [df for df in dados_existentes.values() if 'Total de Faltas' in df.columns]
+        dfs_para_resumo = [df for df in dados_existentes.values() if 'Total de Faltas' in df.columns and not df.empty]
         if dfs_para_resumo:
             combined_df = pd.concat(dfs_para_resumo, ignore_index=True)
             df_resumo = combined_df.groupby(['Matricula', 'Nome', 'Turma', 'Disciplina'])['Total de Faltas'].sum().reset_index()
@@ -43,6 +90,7 @@ def gerar_relatorio_faltas(dados_da_sessao, logger):
                 df.sort_values(by=['Turma', 'Nome', 'Disciplina'], inplace=True)
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
             if 'df_resumo' in locals() and not df_resumo.empty:
+                df_resumo.sort_values(by=['Turma', 'Nome', 'Disciplina'], inplace=True)
                 df_resumo.to_excel(writer, sheet_name=sheet_name_resumo, index=False)
 
         workbook = load_workbook(output_path)
@@ -53,8 +101,6 @@ def gerar_relatorio_faltas(dados_da_sessao, logger):
     except Exception as e:
         logger(f"ERRO ao salvar relatório detalhado: {e}")
 
-# Em modulos/gerador_relatorios.py, substitua esta função:
-
 # Em modulos/gerador_relatorios.py, substitua apenas esta função:
 
 def gerar_relatorio_simples(df_problemas, report_date, logger):
@@ -63,45 +109,20 @@ def gerar_relatorio_simples(df_problemas, report_date, logger):
         logger("Nenhum problema de frequência encontrado.")
         return
 
-    project_root = os.path.dirname(os.path.dirname(__file__))
-    output_path = os.path.join(project_root, 'relatorios', f"relatorio_frequencia_{report_date.strftime('%d%m%y')}.xlsx")
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    from openpyxl import Workbook
+    
+    file_name = f"{config.SIMPLE_REPORT_PREFIX}{report_date.strftime('%d%m%y')}.xlsx"
+    output_path = os.path.join(config.REPORTS_DIR, file_name)
+    os.makedirs(config.REPORTS_DIR, exist_ok=True)
     
     dias_semana_pt = {0: 'Segunda-feira', 1: 'Terça-feira', 2: 'Quarta-feira', 3: 'Quinta-feira', 4: 'Sexta-feira', 5: 'Sábado', 6: 'Domingo'}
     dia_da_semana_pt = dias_semana_pt.get(report_date.weekday(), '')
 
-    from openpyxl import Workbook
-    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-    from openpyxl.utils import get_column_letter
-
     wb = Workbook()
     ws = wb.active
     ws.title = report_date.strftime('%d-%m-%Y')
-
-    # --- ESCRITA DOS DADOS (SIMPLIFICADA) ---
-    
-    # Título Principal
-    ws.append([f"Relatório de Frequência - {dia_da_semana_pt}, {report_date.strftime('%d/%m/%Y')}"])
-    ws.merge_cells('A1:D1')
-    ws.append([]) # Linha em branco
-
-    df_problemas.sort_values(by=['Turma', 'Nome do Aluno'], inplace=True)
-    for turma, data in df_problemas.groupby('Turma'):
-        # Header da Turma
-        ws.append([f"TURMA: {turma}"])
-        ws.merge_cells(f'A{ws.max_row}:D{ws.max_row}')
-        
-        # Headers das Colunas
-        headers = ['Matrícula', 'Nome do Aluno', 'Problema', 'Acesso']
-        ws.append(headers)
-        
-        # Dados dos Alunos
-        for _, aluno in data.iterrows():
-            ws.append([aluno['Matricula'], aluno['Nome do Aluno'], aluno['Problema'], aluno['Acesso']])
-        
-        ws.append([]) # Linha em branco entre as turmas
-
-    # --- APLICAÇÃO DA FORMATAÇÃO (SEPARADA) ---
     
     # Estilos
     title_font = Font(name='Calibri', size=14, bold=True, color="FFFFFF")
@@ -114,43 +135,59 @@ def gerar_relatorio_simples(df_problemas, report_date, logger):
     fill_saiu_cedo = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
     thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     
-    # Formata Título
-    ws['A1'].font = title_font
-    ws['A1'].fill = title_fill
-    ws['A1'].alignment = Alignment(horizontal='center')
-
-    # Itera sobre todas as linhas para aplicar estilos e bordas
-    for row_idx, row in enumerate(ws.iter_rows(), 1):
-        cell_A = ws[f'A{row_idx}']
+    # Título Principal
+    cell_titulo = ws['A1']
+    cell_titulo.value = f"Relatório de Frequência - {dia_da_semana_pt}, {report_date.strftime('%d/%m/%Y')}"
+    ws.merge_cells('A1:D1')
+    cell_titulo.font = title_font
+    cell_titulo.fill = title_fill
+    cell_titulo.alignment = Alignment(horizontal='center')
+    # Aplica borda em todas as células da linha do título após mesclar
+    for i in range(1, 5): ws.cell(row=1, column=i).border = thin_border
+    
+    current_row = 3
+    df_problemas.sort_values(by=['Turma', 'Nome do Aluno'], inplace=True)
+    
+    todas_as_turmas_hardcoded = ['EF1601', 'EF1602', 'EF1701', 'EF1702', 'EF1801', 'EF1802', 'EF1803', 'EF1901', 'EF1902', 'EM2101', 'EM2102', 'EM2201', 'EM2202', 'EM2301', 'EM2302']
+    
+    for turma in todas_as_turmas_hardcoded:
+        # Header da Turma
+        cell_turma = ws.cell(row=current_row, column=1, value=f"TURMA: {turma}")
+        ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=4)
+        cell_turma.font = turma_font
+        cell_turma.fill = turma_fill
+        # Aplica borda em todas as células da linha da turma
+        for i in range(1, 5): ws.cell(row=current_row, column=i).border = thin_border
+        current_row += 1
         
-        # Formata header de turma
-        if cell_A.value and str(cell_A.value).startswith("TURMA:"):
-            cell_A.font = turma_font
-            cell_A.fill = turma_fill
-            for cell in row: cell.border = thin_border
-            continue
-
-        # Formata header de colunas
-        if cell_A.value == "Matrícula":
-            for cell in row:
+        data = df_problemas[df_problemas['Turma'] == turma]
+        
+        if not data.empty:
+            headers = ['Matrícula', 'Nome do Aluno', 'Problema', 'Acesso']
+            for col_num, header_text in enumerate(headers, 1):
+                cell = ws.cell(row=current_row, column=col_num, value=header_text)
                 cell.font = header_font
                 cell.border = thin_border
-            continue
-
-        # Formata linhas de dados
-        if isinstance(cell_A.value, (int, str)) and len(str(cell_A.value)) > 5: # Assumindo que matrícula tem mais de 5 dígitos
-            problema_cell_value = ws[f'C{row_idx}'].value
-            fill_color = None
-            if problema_cell_value == 'FALTOU': fill_color = fill_faltou
-            elif problema_cell_value == 'CHEGOU ATRASADO': fill_color = fill_atrasado
-            elif problema_cell_value == 'SAIU CEDO': fill_color = fill_saiu_cedo
+            current_row += 1
             
-            for cell in row:
-                cell.border = thin_border
-                if fill_color:
-                    cell.fill = fill_color
-    
-    # Ajuste de colunas
+            for _, aluno in data.iterrows():
+                row_data = [aluno['Matricula'], aluno['Nome do Aluno'], aluno['Problema'], aluno['Acesso']]
+                fill_color = None
+                if aluno['Problema'] == 'FALTOU': fill_color = fill_faltou
+                elif aluno['Problema'] == 'CHEGOU ATRASADO': fill_color = fill_atrasado
+                elif aluno['Problema'] == 'SAIU CEDO': fill_color = fill_saiu_cedo
+
+                for col_num, cell_value in enumerate(row_data, 1):
+                    cell = ws.cell(row=current_row, column=col_num, value=cell_value)
+                    cell.border = thin_border
+                    if fill_color:
+                        cell.fill = fill_color
+                current_row += 1
+        
+        # Deixa uma linha em branco entre os blocos
+        current_row += 1
+
+    # Ajuste final de colunas
     for col_idx, col in enumerate(ws.columns, 1):
         max_length = 0
         column_letter = get_column_letter(col_idx)
