@@ -1,19 +1,9 @@
 import sqlite3
 import os
 
-# --- Bloco de Código Corrigido ---
-# Pega o diretório onde este script (consulta_alunos.py) está localizado.
-# Ex: C:/.../Diário/modulos
 script_dir = os.path.dirname(__file__)
-
-# Constrói o caminho para a pasta principal do projeto (uma pasta acima de 'modulos')
-# Ex: C:/.../Diário
 project_root = os.path.dirname(script_dir)
-
-# Constrói o caminho completo e correto para o banco de dados
-# Ex: C:/.../Diário/db/alunos.db
-nome_banco_de_dados = os.path.join(project_root, 'db', 'alunos.db')
-# --- Fim do Bloco de Código Corrigido ---
+nome_banco_de_dados = os.path.join(project_root, 'db', 'unico.db')
 
 def obter_contagem_alunos():
     """

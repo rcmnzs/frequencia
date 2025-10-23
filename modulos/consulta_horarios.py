@@ -1,16 +1,9 @@
 import sqlite3
 import os
 
-# --- Bloco de Código Corrigido ---
-# Pega o diretório onde este script (consulta_horarios.py) está localizado.
 script_dir = os.path.dirname(__file__)
-
-# Constrói o caminho para a pasta principal do projeto.
 project_root = os.path.dirname(script_dir)
-
-# Constrói o caminho completo e correto para o banco de dados.
-nome_banco_de_dados = os.path.join(project_root, 'db', 'horarios.db')
-# --- Fim do Bloco de Código Corrigido ---
+nome_banco_de_dados = os.path.join(project_root, 'db', 'unico.db')
 
 def obter_contagem_horarios():
     """

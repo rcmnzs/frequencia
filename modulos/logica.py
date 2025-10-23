@@ -90,26 +90,40 @@ def buscar_aluno(df_alunos, matricula_pdf=None, nome_pdf=None, logger=print):
     return None
 
 
+# Em modulos/logica.py, substitua apenas esta função:
+
 def carregar_dados_base(logger):
-    logger("Conectando aos bancos de dados...")
+    logger("Conectando ao banco de dados unificado...")
     try:
+        # --- INÍCIO DA ALTERAÇÃO ---
         script_dir = os.path.dirname(__file__)
         project_root = os.path.dirname(script_dir)
-        path_alunos_db = os.path.join(project_root, 'db', 'alunos.db')
-        path_horarios_db = os.path.join(project_root, 'db', 'horarios.db')
-        conn_alunos = sqlite3.connect(path_alunos_db)
-        df_alunos = pd.read_sql_query("SELECT * FROM alunos", conn_alunos)
-        conn_alunos.close()
-        conn_horarios = sqlite3.connect(path_horarios_db)
-        df_horarios = pd.read_sql_query("SELECT * FROM horarios", conn_horarios)
-        conn_horarios.close()
+        
+        # Define o caminho para o banco de dados unificado
+        path_unico_db = os.path.join(project_root, 'db', 'unico.db')
+        
+        # Conecta ao banco de dados unificado
+        conn = sqlite3.connect(path_unico_db)
+        
+        # Lê a tabela 'alunos'
+        df_alunos = pd.read_sql_query("SELECT * FROM alunos", conn)
+        
+        # Lê a tabela 'horarios'
+        df_horarios = pd.read_sql_query("SELECT * FROM horarios", conn)
+        
+        # Fecha a conexão única
+        conn.close()
+        # --- FIM DA ALTERAÇÃO ---
+
+        # O resto da função permanece o mesmo
         df_alunos['matricula'] = df_alunos['matricula'].astype(str)
         df_horarios['hora_inicio'] = pd.to_datetime(df_horarios['hora_inicio'], format='%H:%M').dt.time
         df_horarios['hora_fim'] = pd.to_datetime(df_horarios['hora_fim'], format='%H:%M').dt.time
+        
         logger("Bancos de dados carregados com sucesso.")
         return df_alunos, df_horarios
     except Exception as e:
-        logger(f"ERRO ao carregar os bancos de dados: {e}")
+        logger(f"ERRO ao carregar o banco de dados 'unico.db': {e}")
         return None, None
 
 
