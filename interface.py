@@ -5,7 +5,8 @@ import threading
 import fitz  # PyMuPDF, usado para a validação rápida
 
 try:
-    from modulos.logica import processar_dados_diarios, gerar_relatorio_faltas, gerar_relatorio_simples
+    from modulos.processador import processar_dados_diarios
+    from modulos.gerador_relatorios import gerar_relatorio_faltas, gerar_relatorio_simples
 except ImportError:
     print("ERRO: Certifique-se de que a pasta 'modulos' e o arquivo 'logica.py' existem.")
     exit()
