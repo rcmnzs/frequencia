@@ -2,31 +2,38 @@ import tkinter as tk
 from tkinter import ttk, filedialog, scrolledtext, messagebox
 import os
 import threading
-import fitz
+import fitz  # PyMuPDF, usado para a validação rápida
 
-# Importa as novas funções dos módulos corretos
-from modulos.processador import processar_dados_diarios
-from modulos.gerador_relatorios import gerar_relatorio_faltas, gerar_relatorio_simples
-# Importa o novo arquivo de configuração
-import config
+# Importa as funções de lógica
+try:
+    from modulos.processador import processar_dados_diarios
+    from modulos.gerador_relatorios import gerar_relatorio_faltas, gerar_relatorio_simples
+    import config
+except ImportError as e:
+    print(f"ERRO DE IMPORTAÇÃO: {e}. Certifique-se de que a estrutura de pastas e os arquivos estão corretos.")
+    exit()
 
 class App:
     def __init__(self, root, db_alunos_status, db_alunos_count, db_horarios_status, db_horarios_count):
         self.root = root
         self.root.title("Sistema de Apuração de Faltas")
-        self.root.geometry("800x600")
+        self.root.geometry("850x600")
 
         self.ausentes_pdf_path = ""
         self.frequencia_pdf_path = ""
         self.dados_processados_da_sessao = {}
 
-        # --- USO DO CONFIG.PY ---
         self.pdf_dir = config.PDF_DIR
         if not os.path.exists(self.pdf_dir):
             os.makedirs(self.pdf_dir)
 
+        self.filtro_ativo = tk.BooleanVar(value=True)
+        self.hora_inicio_filtro = tk.StringVar(value="00:00")
+        self.hora_fim_filtro = tk.StringVar(value="12:00")
+
         self._create_widgets()
         self._update_status_bar(db_alunos_status, db_alunos_count, db_horarios_status, db_horarios_count)
+        self._toggle_filtro_horario()
 
     def _create_widgets(self):
         attach_frame = tk.Frame(self.root, padx=10, pady=10)
@@ -39,17 +46,29 @@ class App:
         btn_frequencia.pack(side=tk.LEFT, padx=(20, 5))
         self.lbl_frequencia = tk.Label(attach_frame, text="Nenhum arquivo", fg="grey")
         self.lbl_frequencia.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        filtro_frame = tk.Frame(self.root, padx=10)
+        filtro_frame.pack(fill=tk.X, side=tk.TOP, pady=5)
+        self.chk_filtro = tk.Checkbutton(filtro_frame, text="Ativar filtro de horário (ignorar aulas fora do intervalo):", variable=self.filtro_ativo, command=self._toggle_filtro_horario)
+        self.chk_filtro.pack(side=tk.LEFT)
+        self.lbl_inicio = tk.Label(filtro_frame, text="Início:")
+        self.lbl_inicio.pack(side=tk.LEFT, padx=(10, 0))
+        self.entry_inicio = tk.Entry(filtro_frame, textvariable=self.hora_inicio_filtro, width=7)
+        self.entry_inicio.pack(side=tk.LEFT)
+        self.lbl_fim = tk.Label(filtro_frame, text="Fim:")
+        self.lbl_fim.pack(side=tk.LEFT, padx=(10, 0))
+        self.entry_fim = tk.Entry(filtro_frame, textvariable=self.hora_fim_filtro, width=7)
+        self.entry_fim.pack(side=tk.LEFT)
         
         action_frame = tk.Frame(self.root)
         action_frame.pack(pady=10)
-        
         self.btn_processar = tk.Button(action_frame, text="1. Processar Dados do Dia", font=('Helvetica', 10, 'bold'), bg="#008CBA", fg="white", command=self._iniciar_processamento)
         self.btn_processar.pack(side=tk.LEFT, padx=10, ipadx=10, ipady=5)
         self.btn_gerar_detalhado = tk.Button(action_frame, text="2. Gerar Relatório Detalhado", state="disabled", command=self._gerar_relatorio_faltas)
         self.btn_gerar_detalhado.pack(side=tk.LEFT, padx=10)
         self.btn_gerar_simples = tk.Button(action_frame, text="3. Gerar Relatório Simples", state="disabled", command=self._gerar_relatorio_simples)
         self.btn_gerar_simples.pack(side=tk.LEFT, padx=10)
-        
+
         status_frame = tk.Frame(self.root, bd=1, relief=tk.SUNKEN)
         status_frame.pack(side=tk.BOTTOM, fill=tk.X)
         self.lbl_db_alunos_status = tk.Label(status_frame, text="BD Alunos: -", anchor='w')
@@ -64,22 +83,26 @@ class App:
         self.console = scrolledtext.ScrolledText(console_frame, wrap=tk.WORD, state='disabled', font=("Courier New", 9))
         self.console.pack(expand=True, fill='both')
 
+    def _toggle_filtro_horario(self):
+        state = "normal" if self.filtro_ativo.get() else "disabled"
+        self.entry_inicio.config(state=state)
+        self.entry_fim.config(state=state)
+
     def _get_pdf_text_for_validation(self, filepath):
         try:
             with fitz.open(filepath) as doc:
-                if len(doc) > 0: return doc[0].get_text()
+                if len(doc) > 0:
+                    return doc[0].get_text()
                 return ""
         except Exception as e:
-            self._write_to_console(f"Erro ao ler PDF para validação: {e}")
+            self._write_to_console(f"Erro ao tentar ler o PDF para validação: {e}")
             return None
 
     def _select_ausentes_pdf(self):
         filepath = filedialog.askopenfilename(title="Selecione o PDF de Ausentes", initialdir=self.pdf_dir, filetypes=[("Arquivos PDF", "*.pdf")])
         if not filepath: return
-
         text = self._get_pdf_text_for_validation(filepath)
         keyword = config.KEYWORD_AUSENTES
-
         if text is None or keyword not in text:
             messagebox.showerror("Arquivo Incorreto", f"ERRO: O arquivo não parece ser um relatório de AUSENTES.\n(Palavra-chave '{keyword}' não encontrada).")
             self.ausentes_pdf_path = ""
@@ -91,10 +114,8 @@ class App:
     def _select_frequencia_pdf(self):
         filepath = filedialog.askopenfilename(title="Selecione o PDF de Frequência", initialdir=self.pdf_dir, filetypes=[("Arquivos PDF", "*.pdf")])
         if not filepath: return
-
         text = self._get_pdf_text_for_validation(filepath)
         keyword = config.KEYWORD_FREQUENCIA
-
         if text is None or keyword not in text:
             messagebox.showerror("Arquivo Incorreto", f"ERRO: O arquivo não parece ser um relatório de FREQUÊNCIA.\n(Palavra-chave '{keyword}' não encontrada).")
             self.frequencia_pdf_path = ""
@@ -140,7 +161,10 @@ class App:
             dados_do_dia = processar_dados_diarios(
                 ausentes_path=self.ausentes_pdf_path,
                 frequencia_path=self.frequencia_pdf_path,
-                logger=self._write_to_console
+                logger=self._write_to_console,
+                filtro_ativo=self.filtro_ativo.get(),
+                hora_inicio=self.hora_inicio_filtro.get(),
+                hora_fim=self.hora_fim_filtro.get()
             )
             sucesso = dados_do_dia and dados_do_dia[0] is not None
             if sucesso:
