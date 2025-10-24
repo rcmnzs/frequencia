@@ -91,23 +91,35 @@ def processar_dados_diarios(ausentes_path, frequencia_path, logger,
     # --- Processa Ausentes ---
     logger("\n--- Processando Relatório de Ausentes ---")
     df_ausentes, report_date = extrair_dados_ausentes(ausentes_path)
-    # ... (lógica de extração de data e dia da semana inalterada) ...
+    
     if report_date is None:
-        raise ErroExtracaoDados("A data não foi encontrada no PDF de ausentes.")
+        logger("ERRO: A data não foi encontrada no PDF de ausentes.")
+        return None, None, None
+        
     dia_numero = report_date.weekday()
-    dias_semana_map = {0: 'SEGUNDA-FEIRA', 1: 'TERÇA-FEIRA', 2: 'QUARTA-FEIRA', 3: 'QUINTA-FEIRA', 4: 'SEXTA-FEIRA', 5: 'SÁBADO', 6: 'DOMINGO'}
+    dias_semana_map = {0: 'SEGUNDA-FEIRA', 1: 'TERÇA-FEIRA', 2: 'QUARTA-FEIRA', 
+                       3: 'QUINTA-FEIRA', 4: 'SEXTA-FEIRA', 5: 'SÁBADO', 6: 'DOMINGO'}
     dia_semana = dias_semana_map.get(dia_numero)
     
+    logger(f"Data do relatório: {report_date.strftime('%d/%m/%Y')} ({dia_semana})")
+    
     if df_ausentes is not None and not df_ausentes.empty:
+        logger(f"Total de alunos ausentes encontrados: {len(df_ausentes)}")
         for _, row in df_ausentes.iterrows():
             info_aluno = buscar_aluno(df_alunos, matricula_pdf=row['Matrícula'], nome_pdf=row['Nome'], logger=logger)
             if info_aluno is not None:
                 turma, nome_db, matricula_db = info_aluno['turma'], info_aluno['nome'], info_aluno['matricula']
-                problemas_alunos.append({'Matricula': matricula_db, 'Nome do Aluno': nome_db, 'Turma': turma, 'Problema': 'FALTOU', 'Acesso': 'Sem registro'})
+                problemas_alunos.append({
+                    'Matricula': matricula_db, 
+                    'Nome do Aluno': nome_db, 
+                    'Turma': turma, 
+                    'Problema': 'FALTOU', 
+                    'Acesso': 'Sem registro'
+                })
                 
                 aulas_do_dia_bruto = df_horarios[(df_horarios['turma'] == turma) & (df_horarios['dia_semana'] == dia_semana)]
                 
-                # --- APLICAÇÃO DO FILTRO ---
+                # Aplicação do filtro
                 aulas_do_dia = aulas_do_dia_bruto
                 if filtro_ativo:
                     aulas_do_dia = aulas_do_dia_bruto[
@@ -122,12 +134,19 @@ def processar_dados_diarios(ausentes_path, frequencia_path, logger,
     # --- Processa Frequência ---
     logger("\n--- Processando Relatório de Frequência ---")
     df_frequencia, date_frequencia = extrair_dados_frequencia(frequencia_path)
-    # ... (validação de data inalterada) ...
-    if date_frequencia is None or report_date.date() != date_frequencia.date():
-        raise ErroValidacao(f"As datas dos PDFs não coincidem.")
+    
+    if date_frequencia is None:
+        logger("ERRO: A data não foi encontrada no PDF de frequência.")
+        return None, None, None
+        
+    if report_date.date() != date_frequencia.date():
+        logger(f"ERRO: As datas dos PDFs não coincidem. Ausentes: {report_date.date()}, Frequência: {date_frequencia.date()}")
+        return None, None, None
 
     if df_frequencia is not None and not df_frequencia.empty:
+        logger(f"Total de registros de frequência encontrados: {len(df_frequencia)}")
         df_frequencia['Hora'] = pd.to_datetime(df_frequencia['Hora'], format='%H:%M:%S').dt.time
+        
         for grupo_keys, acesso_aluno_df in df_frequencia.groupby(['Crachá', 'Nome']):
             info_aluno = buscar_aluno(df_alunos, matricula_pdf=grupo_keys[0], nome_pdf=grupo_keys[1], logger=logger)
             if info_aluno is not None:
@@ -135,7 +154,7 @@ def processar_dados_diarios(ausentes_path, frequencia_path, logger,
                 
                 aulas_do_dia_bruto = df_horarios[(df_horarios['turma'] == turma) & (df_horarios['dia_semana'] == dia_semana)]
                 
-                # --- APLICAÇÃO DO FILTRO ---
+                # Aplicação do filtro
                 aulas_do_dia = aulas_do_dia_bruto
                 if filtro_ativo:
                     aulas_do_dia = aulas_do_dia_bruto[
@@ -143,7 +162,87 @@ def processar_dados_diarios(ausentes_path, frequencia_path, logger,
                         (aulas_do_dia_bruto['hora_inicio'] < hora_fim_obj)
                     ]
 
-                # ... (resto da lógica de cálculo de problemas e faltas inalterada) ...
+                if aulas_do_dia.empty:
+                    continue
+                
+                # Ordena os acessos por hora
+                acesso_aluno_df = acesso_aluno_df.sort_values('Hora')
+                
+                # Pega primeira aula do dia
+                primeira_aula = aulas_do_dia.iloc[0]
+                hora_inicio_aulas = primeira_aula['hora_inicio']
+                
+                # Pega última aula do dia
+                ultima_aula = aulas_do_dia.iloc[-1]
+                hora_fim_aulas = ultima_aula['hora_fim']
+                
+                # Encontra primeira entrada e última saída
+                entradas = acesso_aluno_df[acesso_aluno_df['Sentido'] == 'Entrada']
+                saidas = acesso_aluno_df[acesso_aluno_df['Sentido'] == 'Saída']
+                
+                primeira_entrada = entradas.iloc[0] if not entradas.empty else None
+                ultima_saida = saidas.iloc[-1] if not saidas.empty else None
+                
+                # Verifica atraso (tolerância de 15 minutos)
+                if primeira_entrada is not None:
+                    hora_entrada = primeira_entrada['Hora']
+                    # Converte time para minutos para facilitar comparação
+                    minutos_entrada = hora_entrada.hour * 60 + hora_entrada.minute
+                    minutos_inicio = hora_inicio_aulas.hour * 60 + hora_inicio_aulas.minute
+                    tolerancia_minutos = 15
+                    
+                    if minutos_entrada > (minutos_inicio + tolerancia_minutos):
+                        problemas_alunos.append({
+                            'Matricula': matricula_db,
+                            'Nome do Aluno': nome_db,
+                            'Turma': turma,
+                            'Problema': 'CHEGOU ATRASADO',
+                            'Acesso': f"Entrada: {hora_entrada.strftime('%H:%M:%S')}"
+                        })
+                        logger(f"  - {nome_db} chegou atrasado às {hora_entrada}")
+                
+                # Verifica saída antecipada (tolerância de 15 minutos antes do fim)
+                if ultima_saida is not None:
+                    hora_saida = ultima_saida['Hora']
+                    minutos_saida = hora_saida.hour * 60 + hora_saida.minute
+                    minutos_fim = hora_fim_aulas.hour * 60 + hora_fim_aulas.minute
+                    tolerancia_minutos = 15
+                    
+                    if minutos_saida < (minutos_fim - tolerancia_minutos):
+                        problemas_alunos.append({
+                            'Matricula': matricula_db,
+                            'Nome do Aluno': nome_db,
+                            'Turma': turma,
+                            'Problema': 'SAIU CEDO',
+                            'Acesso': f"Saída: {hora_saida.strftime('%H:%M:%S')}"
+                        })
+                        logger(f"  - {nome_db} saiu cedo às {hora_saida}")
+                
+                # Calcula faltas em aulas específicas (lógica existente de presença)
+                for _, aula in aulas_do_dia.iterrows():
+                    hora_ini_aula = aula['hora_inicio']
+                    hora_fim_aula = aula['hora_fim']
+                    
+                    # Verifica se há registro de presença durante a aula
+                    presenca_na_aula = False
+                    for _, acesso in acesso_aluno_df.iterrows():
+                        hora_acesso = acesso['Hora']
+                        if acesso['Sentido'] == 'Entrada' and hora_acesso <= hora_fim_aula:
+                            # Verifica se há saída após o fim da aula ou se é a última entrada do dia
+                            saidas_posteriores = acesso_aluno_df[
+                                (acesso_aluno_df['Sentido'] == 'Saída') & 
+                                (acesso_aluno_df['Hora'] > hora_acesso)
+                            ]
+                            if saidas_posteriores.empty or saidas_posteriores.iloc[0]['Hora'] >= hora_ini_aula:
+                                presenca_na_aula = True
+                                break
+                    
+                    if not presenca_na_aula:
+                        chave_falta = (matricula_db, nome_db, turma, aula['disciplina'])
+                        faltas_registradas[chave_falta] = faltas_registradas.get(chave_falta, 0) + 1
     
     df_problemas = pd.DataFrame(problemas_alunos)
+    logger(f"\n--- Processamento Concluído ---")
+    logger(f"Total de problemas detectados: {len(problemas_alunos)}")
+    
     return report_date, faltas_registradas, df_problemas
