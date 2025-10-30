@@ -2,6 +2,7 @@ import pandas as pd
 import os
 from openpyxl import load_workbook, Workbook
 import sys
+from datetime import time
 
 # Adiciona o diretório raiz ao path para encontrar o 'config'
 project_root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -16,7 +17,6 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.utils import get_column_letter
 
 def formatar_relatorio_detalhado(worksheet, has_status_col=False):
-    # (Esta função permanece a mesma da última versão funcional)
     header_font = Font(bold=True)
     thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     for row in worksheet.iter_rows(min_row=1, max_row=worksheet.max_row, min_col=1, max_col=worksheet.max_column):
@@ -44,7 +44,6 @@ def formatar_relatorio_detalhado(worksheet, has_status_col=False):
 
 # --- FUNÇÃO DE GERAÇÃO DO RELATÓRIO DETALHADO ---
 def gerar_relatorio_faltas(dados_da_sessao, logger):
-    # (Esta função permanece a mesma da última versão funcional)
     logger("\n--- Gerando Relatório Detalhado de Faltas com Resumo Semanal ---")
     if not dados_da_sessao:
         logger("Nenhum dado novo foi processado para gerar relatório.")
@@ -91,6 +90,38 @@ def gerar_relatorio_faltas(dados_da_sessao, logger):
 def gerar_relatorio_simples(df_problemas, report_date, logger):
     logger("\n--- Gerando Relatório Simples de Frequência ---")
     
+    # *** FILTRO ADICIONADO AQUI: Só mostra acessos após 7:50 ***
+    horario_corte = time(7, 50)
+    
+    def filtrar_por_horario(row):
+        # Se for FALTOU, mantém (não tem horário específico)
+        if row['Problema'] == 'FALTOU':
+            return True
+        
+        # Para CHEGOU ATRASADO e SAIU CEDO, verifica o horário
+        acesso_str = row['Acesso']
+        if acesso_str and acesso_str != 'Sem registro':
+            try:
+                # Extrai o horário do formato "Entrada: HH:MM:SS" ou "Saída: HH:MM:SS"
+                horario_str = acesso_str.split(': ')[1]  # Pega "HH:MM:SS"
+                hora, minuto, segundo = map(int, horario_str.split(':'))
+                horario_acesso = time(hora, minuto, segundo)
+                
+                # Só mostra se o acesso foi após 7:50
+                return horario_acesso >= horario_corte
+            except:
+                # Se houver erro ao processar, mantém o registro
+                return True
+        return True
+    
+    # Aplica o filtro
+    df_problemas_filtrado = df_problemas[df_problemas.apply(filtrar_por_horario, axis=1)].copy()
+    
+    if df_problemas_filtrado.empty:
+        logger("Nenhum problema de frequência após 7:50 detectado. Relatório vazio.")
+    else:
+        logger(f"Registros filtrados (após 7:50): {len(df_problemas_filtrado)} de {len(df_problemas)} totais")
+    
     file_name = f"{config.SIMPLE_REPORT_PREFIX}{report_date.strftime('%d%m%y')}.xlsx"
     output_path = os.path.join(config.REPORTS_DIR, file_name)
     os.makedirs(config.REPORTS_DIR, exist_ok=True)
@@ -129,21 +160,20 @@ def gerar_relatorio_simples(df_problemas, report_date, logger):
     
     current_row = 3
     
-    # *** EXTRAI TURMAS DINAMICAMENTE DOS DADOS ***
-    if df_problemas.empty:
-        logger("Nenhum problema de frequência detectado. Relatório vazio.")
+    # *** EXTRAI TURMAS DINAMICAMENTE DOS DADOS FILTRADOS ***
+    if df_problemas_filtrado.empty:
         # Ainda salva o relatório com apenas o título
         wb.save(output_path)
         logger(f"Relatório simples salvo com sucesso em: {output_path}")
         return
     
-    # Obtém lista única de turmas presentes nos dados, ordenadas
-    turmas_com_problemas = sorted(df_problemas['Turma'].unique())
-    logger(f"Turmas com problemas detectados: {', '.join(turmas_com_problemas)}")
+    # Obtém lista única de turmas presentes nos dados filtrados, ordenadas
+    turmas_com_problemas = sorted(df_problemas_filtrado['Turma'].unique())
+    logger(f"Turmas com problemas detectados (após 7:50): {', '.join(turmas_com_problemas)}")
     
     for turma in turmas_com_problemas:
         # Filtra dados da turma
-        data = df_problemas[df_problemas['Turma'] == turma].copy()
+        data = df_problemas_filtrado[df_problemas_filtrado['Turma'] == turma].copy()
         
         # Header da Turma
         turma_cell = ws.cell(row=current_row, column=1, value=f"TURMA: {turma}")
